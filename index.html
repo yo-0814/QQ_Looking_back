@@ -1432,7 +1432,7 @@
       </div>
     </div>
     <div class="grid grid-cols-2 gap-0 border-t border-[var(--line)]">
-      <button class="p-4 text-[var(--muted)] font-semibold border-r border-[var(--line)]" onclick="closeModal('confirmModal')">キャンセル</button>
+      <button class="p-4 text-[var(--muted)] font-semibold border-r border-[var(--line)]" onclick="closeModal('confirmModal'); encouragePrefetch=null;">キャンセル</button>
       <button class="p-4 text-[var(--navy-800)] font-bold" id="confirmSaveBtn">保存する</button>
     </div>
   </div>
@@ -3306,6 +3306,15 @@ function setupSaveFlow() {
       return;
     }
     openModal("confirmModal");
+
+    // プリフェッチ: 確認モーダル表示中に裏でねぎらいメッセージを生成開始
+    // ユーザーが確認ボタンを押すまでの数秒を有効活用する
+    try {
+      const previewRec = buildRecord();
+      prefetchEncouragement(previewRec);
+    } catch (e) {
+      console.warn("prefetch skip:", e);
+    }
   });
 
   $("#confirmSaveBtn").addEventListener("click", () => {
@@ -3391,13 +3400,15 @@ function askDeleteRecord(id) {
 }
 
 // ════════════════════════════════════════════════════════════════
-//  AIねぎらいメッセージ生成（Gemini API版）
-//  - 保存成功時にGAS経由でGemini APIを呼び、メッセージを表示
-//  - 個人情報の有無を検知して2モードで送信
-//      detail: 自由記述含む（質の高いメッセージ）
-//      safe: 評価項目のみ（無難なメッセージ）
+//  AIねぎらいメッセージ生成（Gemini API版・プリフェッチ対応）
+//  - 保存確認モーダル表示時に裏で生成開始（プリフェッチ）
+//  - 保存完了時に既に結果があれば即表示、なければ完了を待つ
+//  - 個人情報の有無を検知して2モードで送信（detail / safe）
 //  - 失敗時はフォールバックメッセージで体験を壊さない
 // ════════════════════════════════════════════════════════════════
+
+// プリフェッチ状態
+let encouragePrefetch = null; // { promise, result, recordSnapshot }
 
 // 個人情報を示す可能性のあるパターン
 const PII_PATTERNS = [
@@ -3561,6 +3572,72 @@ async function requestEncouragement(rec) {
     showEncourageMessage(ENCOURAGE_FALLBACKS[Math.floor(Math.random() * ENCOURAGE_FALLBACKS.length)], true);
     return;
   }
+
+  // プリフェッチ結果があればそれを使う
+  // （直前の保存ボタン押下時にプリフェッチが走っているはず）
+  if (encouragePrefetch && encouragePrefetch.promise) {
+    const currentPrefetch = encouragePrefetch;
+    encouragePrefetch = null; // 一度使ったら消す
+    try {
+      const result = await currentPrefetch.promise;
+      const modal = $("#postSaveModal");
+      if (modal && modal.dataset.open === "true") {
+        if (result && result.ok) {
+          showEncourageMessage(result.message, false);
+        } else {
+          showEncourageMessage(
+            ENCOURAGE_FALLBACKS[Math.floor(Math.random() * ENCOURAGE_FALLBACKS.length)],
+            true
+          );
+        }
+      }
+    } catch (err) {
+      console.warn("prefetch await failed:", err);
+      const modal = $("#postSaveModal");
+      if (modal && modal.dataset.open === "true") {
+        showEncourageMessage(
+          ENCOURAGE_FALLBACKS[Math.floor(Math.random() * ENCOURAGE_FALLBACKS.length)],
+          true
+        );
+      }
+    }
+    return;
+  }
+
+  // プリフェッチが無い場合は通常通り（フォールバック経路）
+  const result = await fetchEncouragement(rec);
+  const modal = $("#postSaveModal");
+  if (!modal || modal.dataset.open !== "true") return;
+  if (result && result.ok) {
+    showEncourageMessage(result.message, false);
+  } else {
+    showEncourageMessage(
+      ENCOURAGE_FALLBACKS[Math.floor(Math.random() * ENCOURAGE_FALLBACKS.length)],
+      true
+    );
+  }
+}
+
+// プリフェッチ: 保存確認モーダル表示時に呼ぶ
+// 裏で生成し、結果を encouragePrefetch に保管しておく
+function prefetchEncouragement(rec) {
+  if (!rec) return;
+  if (!GAS_URL || GAS_URL.startsWith("PLACEHOLDER")) return;
+
+  encouragePrefetch = {
+    promise: fetchEncouragement(rec).then(r => {
+      if (encouragePrefetch) encouragePrefetch.result = r;
+      return r;
+    }).catch(err => {
+      console.warn("prefetch failed:", err);
+      return { ok: false, error: String(err) };
+    }),
+    result: null,
+  };
+}
+
+// 実際のAPI呼び出し本体（プリフェッチ・通常呼び出し共通）
+async function fetchEncouragement(rec) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 15000);
   try {
@@ -3582,25 +3659,14 @@ async function requestEncouragement(rec) {
     const text = await res.text();
     let json;
     try { json = JSON.parse(text); }
-    catch { throw new Error("Invalid JSON: " + text.slice(0, 100)); }
+    catch { return { ok: false, error: "Invalid JSON" }; }
     if (json && json.ok && json.message) {
-      const modal = $("#postSaveModal");
-      if (modal && modal.dataset.open === "true") {
-        showEncourageMessage(String(json.message).trim(), false);
-      }
-    } else {
-      throw new Error(json && json.error ? json.error : "No message");
+      return { ok: true, message: String(json.message).trim() };
     }
+    return { ok: false, error: (json && json.error) || "No message" };
   } catch (err) {
     clearTimeout(timer);
-    console.warn("encourage failed:", err.message || err);
-    const modal = $("#postSaveModal");
-    if (modal && modal.dataset.open === "true") {
-      showEncourageMessage(
-        ENCOURAGE_FALLBACKS[Math.floor(Math.random() * ENCOURAGE_FALLBACKS.length)],
-        true
-      );
-    }
+    return { ok: false, error: String(err.message || err) };
   }
 }
 
