@@ -1448,6 +1448,24 @@
       <div class="font-display font-bold text-[17px] mb-1">保存しました</div>
       <p class="text-[13px] text-[var(--muted)]">続けて入力しますか？</p>
     </div>
+
+    <!-- ねぎらいメッセージエリア -->
+    <div id="encourageBox" class="mx-4 mb-4 rounded-xl border border-[var(--line)] overflow-hidden" style="background:linear-gradient(135deg,#f0f6ff 0%,#fafbfc 100%)">
+      <div class="px-4 pt-3 pb-2 flex items-center gap-2 border-b border-[var(--line)]" style="background:rgba(255,255,255,0.5)">
+        <div class="w-6 h-6 rounded-full flex items-center justify-center" style="background:var(--navy-800)">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 14 8l6 .5-4.5 4 1.5 6L12 15l-5 3.5 1.5-6L4 8.5 10 8z"/></svg>
+        </div>
+        <div class="font-display font-bold text-[12px] text-[var(--navy-800)]">今日のあなたへ</div>
+      </div>
+      <div id="encourageContent" class="p-4 text-[13px] leading-relaxed text-[var(--navy-900)]" style="min-height:60px">
+        <div id="encourageLoading" class="flex items-center gap-2 text-[var(--muted)]">
+          <svg viewBox="0 0 24 24" width="16" height="16" class="animate-spin" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9" opacity="0.25"/><path d="M21 12a9 9 0 0 0-9-9" stroke-linecap="round"/></svg>
+          <span class="text-[12px]">言葉を選んでいます…</span>
+        </div>
+        <div id="encourageMessage" class="hidden whitespace-pre-wrap"></div>
+      </div>
+    </div>
+
     <div class="grid grid-cols-2 gap-0 border-t border-[var(--line)]">
       <button class="p-4 text-[var(--muted)] font-semibold border-r border-[var(--line)]" id="postCloseBtn">閉じる</button>
       <button class="p-4 text-[var(--navy-800)] font-bold" id="postNewBtn">新規入力</button>
@@ -3340,6 +3358,8 @@ function setupSaveFlow() {
           console.info("記録は端末に保存され、後で同期されます");
         }
       });
+      // ねぎらいメッセージを生成（失敗してもUIには影響しない）
+      requestEncouragement(savedRecord);
     }
   });
 
@@ -3368,6 +3388,119 @@ function setupSaveFlow() {
 function askDeleteRecord(id) {
   deletingId = id;
   openModal("deleteModal");
+}
+
+// ════════════════════════════════════════════════════════════════
+//  AIねぎらいメッセージ生成（Gemini API版）
+//  - 保存成功時にGAS経由でGemini APIを呼び、一言メッセージを表示
+//  - 自由記述（メモ・コメント）は送信しない（個人情報保護）
+//  - 評価項目・件数・勤務情報のみ送信
+//  - 失敗時はフォールバックメッセージで体験を壊さない
+// ════════════════════════════════════════════════════════════════
+function buildEncourageContext(rec) {
+  // 自由記述系（_note / comment / share / no_help_reason 等）は除外
+  // 評価・件数・勤務情報のみ送信
+  return {
+    shift: rec.shift || "",
+    nurses: (rec.team && rec.team.nurses) || 0,
+    doctors: (rec.team && rec.team.doctors) || 0,
+    workload: {
+      break_secured: (rec.workload && rec.workload.break_secured) || "",
+      short_min: (rec.workload && rec.workload.short_min) || 0,
+      short_people: (rec.workload && rec.workload.short_people) || 0,
+      help_requested: (rec.workload && rec.workload.help_requested) || "",
+      // no_help_reason は自由記述なので送らない
+    },
+    team_state: {
+      team_collab: (rec.team_state && rec.team_state.team_collab) || "",
+      external_collab: (rec.team_state && rec.team_state.external_collab) || "",
+      psych_safety: (rec.team_state && rec.team_state.psych_safety) || "",
+      // *_note は自由記述なので送らない
+    },
+    patient_care: {
+      hospitality: (rec.patient_care && rec.patient_care.hospitality) || "",
+      wait_care: (rec.patient_care && rec.patient_care.wait_care) || "",
+      anxiety_relief: (rec.patient_care && rec.patient_care.anxiety_relief) || "",
+      // comment は自由記述なので送らない
+    },
+    good_job_count: (rec.good_jobs || []).length,
+    case_count: (rec.case && rec.case.items) ? rec.case.items.length : 0,
+    // share（本日の共有事項）も自由記述なので送らない
+  };
+}
+
+function showEncourageMessage(text, isError) {
+  const loading = $("#encourageLoading");
+  const msg = $("#encourageMessage");
+  if (!loading || !msg) return;
+  loading.classList.add("hidden");
+  msg.classList.remove("hidden");
+  msg.textContent = text;
+  msg.style.color = isError ? "var(--muted)" : "";
+}
+
+function resetEncourageBox() {
+  const loading = $("#encourageLoading");
+  const msg = $("#encourageMessage");
+  if (loading) loading.classList.remove("hidden");
+  if (msg) {
+    msg.classList.add("hidden");
+    msg.textContent = "";
+    msg.style.color = "";
+  }
+}
+
+const ENCOURAGE_FALLBACKS = [
+  "今日も一日お疲れさま。記録に残せたこと自体が、明日への小さな一歩だよ。",
+  "ここまでやってきた自分を、まずは静かに労ってあげて。",
+  "うまくいった日も、そうじゃない日も、書き残せたなら充分。",
+];
+
+async function requestEncouragement(rec) {
+  resetEncourageBox();
+  if (!GAS_URL || GAS_URL.startsWith("PLACEHOLDER")) {
+    showEncourageMessage(ENCOURAGE_FALLBACKS[Math.floor(Math.random() * ENCOURAGE_FALLBACKS.length)], true);
+    return;
+  }
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15000);
+  try {
+    const body = {
+      secret: GAS_SECRET,
+      action: "encourage",
+      payload: buildEncourageContext(rec),
+    };
+    const res = await fetch(GAS_URL, {
+      method: "POST",
+      redirect: "follow",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    const text = await res.text();
+    let json;
+    try { json = JSON.parse(text); }
+    catch { throw new Error("Invalid JSON: " + text.slice(0, 100)); }
+    if (json && json.ok && json.message) {
+      const modal = $("#postSaveModal");
+      if (modal && modal.dataset.open === "true") {
+        showEncourageMessage(String(json.message).trim(), false);
+      }
+    } else {
+      throw new Error(json && json.error ? json.error : "No message");
+    }
+  } catch (err) {
+    clearTimeout(timer);
+    console.warn("encourage failed:", err.message || err);
+    const modal = $("#postSaveModal");
+    if (modal && modal.dataset.open === "true") {
+      showEncourageMessage(
+        ENCOURAGE_FALLBACKS[Math.floor(Math.random() * ENCOURAGE_FALLBACKS.length)],
+        true
+      );
+    }
+  }
 }
 
 function buildRecord() {
