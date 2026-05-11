@@ -4039,43 +4039,94 @@ function renderRanking(allRecords) {
     if (rank === 1) return `<span class="text-[18px]" style="line-height:1">🥇</span>`;
     if (rank === 2) return `<span class="text-[18px]" style="line-height:1">🥈</span>`;
     if (rank === 3) return `<span class="text-[18px]" style="line-height:1">🥉</span>`;
-    return `<span class="num-tabular text-[12px] font-bold text-[var(--muted)] w-[18px] text-center inline-block">${rank}</span>`;
+    return `<span class="num-tabular text-[12px] font-bold text-[var(--muted)] w-[20px] text-center inline-block">${rank}</span>`;
   };
 
   const topRanking = ranking.slice(0, 3);
+  const restRanking = ranking.slice(3);
+
+  // 1〜3位のリッチ表示
+  const topHtml = topRanking.map((r, i) => {
+    const rank = i + 1;
+    const recent = [...r.comments]
+      .sort((a, b) => (b.saved_at_ms || 0) - (a.saved_at_ms || 0))
+      .slice(0, 2);
+    return `
+      <div class="rounded-lg p-3" style="background:#ecfdf5;border:1px solid #d1fae5">
+        <div class="flex items-center gap-2 mb-1.5">
+          ${medal(rank)}
+          <span class="font-bold text-[14px] text-[var(--navy-900)]">${escapeHtml(r.target)}</span>
+          <span class="ml-auto text-[13px] font-bold num-tabular" style="color:var(--good)">${r.count}<span class="text-[10px] text-[var(--muted)] ml-1">pt</span></span>
+        </div>
+        ${recent.length > 0 ? `
+          <div class="space-y-1 mt-2 pl-1">
+            ${recent.map(c => `
+              <div class="text-[11px] text-[var(--navy-800)] leading-relaxed">
+                <span class="text-[var(--muted)] num-tabular">${c.date}</span>
+                ${c.comment ? `<span class="text-[var(--muted)]"> / </span><span>${escapeHtml(c.comment)}</span>` : `<span class="text-[var(--muted)] italic"> / （コメントなし）</span>`}
+              </div>
+            `).join("")}
+          </div>` : ""}
+      </div>`;
+  }).join("");
+
+  // 4位以降のコンパクト表示（折りたたみ）
+  const restHtml = restRanking.length > 0 ? `
+    <div class="mt-3">
+      <button type="button" id="rankingMoreToggle" data-open="false"
+        class="w-full flex items-center justify-center gap-1.5 py-2 text-[11px] font-semibold text-[var(--muted)] hover:text-[var(--navy-700)] border-t border-[var(--line)] transition-colors">
+        <span id="rankingMoreLabel">もっと見る（${restRanking.length}名）</span>
+        <svg id="rankingMoreIcon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transition:transform 0.2s">
+          <polyline points="6 9 12 15 18 9"></polyline>
+        </svg>
+      </button>
+      <div id="rankingMoreList" class="hidden mt-2 space-y-1">
+        ${restRanking.map((r, i) => {
+          const rank = i + 4;
+          return `
+            <div class="flex items-center gap-2 px-3 py-2 rounded-lg" style="background:#f9fafb;border:1px solid var(--line)">
+              ${medal(rank)}
+              <span class="text-[13px] text-[var(--navy-900)] flex-1 truncate">${escapeHtml(r.target)}</span>
+              <span class="text-[12px] font-bold num-tabular" style="color:var(--good)">${r.count}<span class="text-[10px] text-[var(--muted)] ml-0.5">pt</span></span>
+            </div>`;
+        }).join("")}
+      </div>
+    </div>
+  ` : "";
 
   body.innerHTML = `
     <div class="flex items-center justify-between mb-2 px-1">
       <div class="text-[12px] font-bold text-[var(--navy-700)]">${monthLabel}</div>
       <div class="text-[10px] text-[var(--muted)]">${resetHint}</div>
     </div>
-    <div class="text-[11px] text-[var(--muted)] mb-2 px-1">上位 ${topRanking.length}名${ranking.length > 3 ? `（全${ranking.length}名中）` : ""}</div>
+    <div class="text-[11px] text-[var(--muted)] mb-2 px-1">${ranking.length > 3 ? `全${ranking.length}名（上位3名 + ${restRanking.length}名）` : `上位 ${topRanking.length}名`}</div>
     <div class="space-y-2">
-      ${topRanking.map((r, i) => {
-        const rank = i + 1;
-        const recent = [...r.comments]
-          .sort((a, b) => (b.saved_at_ms || 0) - (a.saved_at_ms || 0))
-          .slice(0, 2);
-        return `
-          <div class="rounded-lg p-3" style="background:#ecfdf5;border:1px solid #d1fae5">
-            <div class="flex items-center gap-2 mb-1.5">
-              ${medal(rank)}
-              <span class="font-bold text-[14px] text-[var(--navy-900)]">${escapeHtml(r.target)}</span>
-              <span class="ml-auto text-[13px] font-bold num-tabular" style="color:var(--good)">${r.count}<span class="text-[10px] text-[var(--muted)] ml-1">pt</span></span>
-            </div>
-            ${recent.length > 0 ? `
-              <div class="space-y-1 mt-2 pl-1">
-                ${recent.map(c => `
-                  <div class="text-[11px] text-[var(--navy-800)] leading-relaxed">
-                    <span class="text-[var(--muted)] num-tabular">${c.date}</span>
-                    ${c.comment ? `<span class="text-[var(--muted)]"> / </span><span>${escapeHtml(c.comment)}</span>` : `<span class="text-[var(--muted)] italic"> / （コメントなし）</span>`}
-                  </div>
-                `).join("")}
-              </div>` : ""}
-          </div>`;
-      }).join("")}
+      ${topHtml}
     </div>
+    ${restHtml}
   `;
+
+  // 「もっと見る」のトグル
+  const moreToggle = $("#rankingMoreToggle");
+  if (moreToggle) {
+    moreToggle.addEventListener("click", () => {
+      const isOpen = moreToggle.dataset.open === "true";
+      const list = $("#rankingMoreList");
+      const label = $("#rankingMoreLabel");
+      const icon = $("#rankingMoreIcon");
+      if (isOpen) {
+        list.classList.add("hidden");
+        moreToggle.dataset.open = "false";
+        label.textContent = `もっと見る（${restRanking.length}名）`;
+        if (icon) icon.style.transform = "";
+      } else {
+        list.classList.remove("hidden");
+        moreToggle.dataset.open = "true";
+        label.textContent = "閉じる";
+        if (icon) icon.style.transform = "rotate(180deg)";
+      }
+    });
+  }
 }
 
 // ════════════════════════════════════════════════════════════════
