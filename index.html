@@ -3388,6 +3388,7 @@ function setupSaveFlow() {
 
   $("#postCloseBtn").addEventListener("click", () => {
     closeModal("postSaveModal");
+    resetForm();
     refreshNotificationBadge();
     // 履歴タブに切替（タブボタンを発火させればrenderHistory・スクロールも自動で走る）
     const histBtn = $('.tab-btn[data-tab="history"]');
