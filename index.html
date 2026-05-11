@@ -1481,7 +1481,7 @@
     </div>
 
     <div class="grid grid-cols-2 gap-0 border-t border-[var(--line)]">
-      <button class="p-4 text-[var(--muted)] font-semibold border-r border-[var(--line)]" id="postCloseBtn">閉じる</button>
+      <button class="p-4 text-[var(--muted)] font-semibold border-r border-[var(--line)]" id="postCloseBtn">履歴を見る</button>
       <button class="p-4 text-[var(--navy-800)] font-bold" id="postNewBtn">新規入力</button>
     </div>
   </div>
@@ -3389,6 +3389,9 @@ function setupSaveFlow() {
   $("#postCloseBtn").addEventListener("click", () => {
     closeModal("postSaveModal");
     refreshNotificationBadge();
+    // 履歴タブに切替（タブボタンを発火させればrenderHistory・スクロールも自動で走る）
+    const histBtn = $('.tab-btn[data-tab="history"]');
+    if (histBtn) histBtn.click();
   });
   $("#postNewBtn").addEventListener("click", () => {
     closeModal("postSaveModal");
