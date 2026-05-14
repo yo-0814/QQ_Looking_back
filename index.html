@@ -336,20 +336,6 @@
   }
   .score-bar > div { height: 100%; border-radius: 3px; transition: width .4s ease; }
 
-  /* Trend badge (前期比) */
-  .trend-badge {
-    display: inline-flex; align-items: center; gap: 2px;
-    font-size: 11px; font-weight: 700;
-    padding: 2px 7px; border-radius: 999px;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-    line-height: 1.4;
-  }
-  .trend-up   { background: #ecfdf5; color: var(--good); border: 1px solid #a7f3d0; }
-  .trend-down { background: #fef2f2; color: var(--bad);  border: 1px solid #fecaca; }
-  .trend-flat { background: #f3f4f6; color: var(--muted); border: 1px solid #e5e7eb; }
-  .trend-na   { background: #f9fafb; color: #9ca3af; border: 1px dashed #e5e7eb; }
-
   /* Icon */
   .ico { stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; fill: none; }
 
@@ -1481,7 +1467,7 @@
     </div>
 
     <div class="grid grid-cols-2 gap-0 border-t border-[var(--line)]">
-      <button class="p-4 text-[var(--muted)] font-semibold border-r border-[var(--line)]" id="postCloseBtn">履歴を見る</button>
+      <button class="p-4 text-[var(--muted)] font-semibold border-r border-[var(--line)]" id="postCloseBtn">閉じる</button>
       <button class="p-4 text-[var(--navy-800)] font-bold" id="postNewBtn">新規入力</button>
     </div>
   </div>
@@ -3123,6 +3109,62 @@ function selectSeg(field, val) {
   });
   formState[field] = val;
   handleConditionals(field, val);
+  // 評価が揃ったら早期プリフェッチを試みる
+  scheduleEarlyPrefetch();
+}
+
+// 必須の評価項目が全部揃ってるかチェック
+function isFormReadyForPrefetch() {
+  return !!(
+    formState.shift &&
+    formState.break_secured &&
+    formState.team_collab &&
+    formState.external_collab &&
+    formState.psych_safety &&
+    formState.hospitality &&
+    formState.wait_care &&
+    formState.anxiety_relief &&
+    formState.case_exists
+  );
+}
+
+// 入力途中の早期プリフェッチをスケジュール
+// - 必須評価項目が全部揃っている時のみ発動
+// - 3秒間入力が止まったらプリフェッチ実行（デバウンス）
+// - 1回の振り返り入力で最大3回まで
+function scheduleEarlyPrefetch() {
+  // 既存のタイマーがあればキャンセル（入力が続いてる間は発動しない）
+  if (earlyPrefetchTimer) {
+    clearTimeout(earlyPrefetchTimer);
+    earlyPrefetchTimer = null;
+  }
+  // 必須項目が揃ってなければ何もしない
+  if (!isFormReadyForPrefetch()) return;
+  // 上限チェック
+  if (earlyPrefetchCount >= EARLY_PREFETCH_MAX) return;
+  // GAS未設定なら何もしない
+  if (!GAS_URL || GAS_URL.startsWith("PLACEHOLDER")) return;
+
+  earlyPrefetchTimer = setTimeout(() => {
+    earlyPrefetchTimer = null;
+    try {
+      const previewRec = buildRecord();
+      prefetchEncouragement(previewRec);
+      earlyPrefetchCount++;
+      console.info(`早期プリフェッチ実行 (${earlyPrefetchCount}/${EARLY_PREFETCH_MAX})`);
+    } catch (e) {
+      console.warn("早期プリフェッチ失敗:", e);
+    }
+  }, EARLY_PREFETCH_DELAY);
+}
+
+// プリフェッチカウンタをリセット（保存完了時/新規入力時）
+function resetEarlyPrefetchCounter() {
+  earlyPrefetchCount = 0;
+  if (earlyPrefetchTimer) {
+    clearTimeout(earlyPrefetchTimer);
+    earlyPrefetchTimer = null;
+  }
 }
 
 function setupSegmented() {
@@ -3322,10 +3364,14 @@ function setupSaveFlow() {
     openModal("confirmModal");
 
     // プリフェッチ: 確認モーダル表示中に裏でねぎらいメッセージを生成開始
-    // ユーザーが確認ボタンを押すまでの数秒を有効活用する
+    // 既に早期プリフェッチが完了/進行中ならそのまま使う（重複API呼び出し防止）
     try {
-      const previewRec = buildRecord();
-      prefetchEncouragement(previewRec);
+      if (encouragePrefetch && encouragePrefetch.promise) {
+        console.info("既存のプリフェッチを再利用");
+      } else {
+        const previewRec = buildRecord();
+        prefetchEncouragement(previewRec);
+      }
     } catch (e) {
       console.warn("prefetch skip:", e);
     }
@@ -3388,11 +3434,7 @@ function setupSaveFlow() {
 
   $("#postCloseBtn").addEventListener("click", () => {
     closeModal("postSaveModal");
-    resetForm();
     refreshNotificationBadge();
-    // 履歴タブに切替（タブボタンを発火させればrenderHistory・スクロールも自動で走る）
-    const histBtn = $('.tab-btn[data-tab="history"]');
-    if (histBtn) histBtn.click();
   });
   $("#postNewBtn").addEventListener("click", () => {
     closeModal("postSaveModal");
@@ -3427,6 +3469,11 @@ function askDeleteRecord(id) {
 
 // プリフェッチ状態
 let encouragePrefetch = null; // { promise, result, recordSnapshot }
+// 早期プリフェッチ管理
+let earlyPrefetchTimer = null;   // デバウンス用タイマー
+let earlyPrefetchCount = 0;       // 自動プリフェッチの発動回数（上限制御）
+const EARLY_PREFETCH_MAX = 3;     // 1回の振り返り入力で自動プリフェッチする最大回数
+const EARLY_PREFETCH_DELAY = 3000; // 入力が止まってからプリフェッチ発動までの待ち時間(ms)
 
 // 個人情報を示す可能性のあるパターン
 const PII_PATTERNS = [
@@ -3740,6 +3787,8 @@ function resetForm() {
     team_collab: null, external_collab: null, psych_safety: null,
     hospitality: null, wait_care: null, anxiety_relief: null,
   };
+  // 早期プリフェッチのカウンタもリセット
+  resetEarlyPrefetchCounter();
   $("#f_date").value = todayIso();
   $("#f_nurses").value = 0;
   $("#f_doctors").value = 0;
@@ -3916,11 +3965,6 @@ function filterByDays(records, days) {
   if (!days || days <= 0) return [...records].sort((a,b) => b.saved_at_ms - a.saved_at_ms);
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
   return records.filter(r => r.saved_at_ms >= cutoff)
-    .sort((a,b) => b.saved_at_ms - a.saved_at_ms);
-}
-// 前期比較用：[fromMs, toMs) の範囲に saved_at_ms が入る記録だけを返す
-function filterByRange(records, fromMs, toMs) {
-  return records.filter(r => r.saved_at_ms >= fromMs && r.saved_at_ms < toMs)
     .sort((a,b) => b.saved_at_ms - a.saved_at_ms);
 }
 
@@ -4478,20 +4522,6 @@ function renderStats() {
   const records = applyFilters(baseRecords, filters);
   const el = $("#statsContent");
 
-  // ===== 前期比較用：今期と同じ長さの直前期間 =====
-  // days=0（全期間）の場合は比較対象なし
-  let prevRecords = [];
-  let hasPrev = false;
-  if (days && days > 0) {
-    const dayMs = 24 * 60 * 60 * 1000;
-    const nowMs = Date.now();
-    const prevFrom = nowMs - days * 2 * dayMs;
-    const prevTo   = nowMs - days * dayMs;
-    const prevBase = filterByRange(loadAll(), prevFrom, prevTo);
-    prevRecords = applyFilters(prevBase, filters);
-    hasPrev = true;
-  }
-
   const activeFilterCount = Object.entries(filters).filter(([k,v]) => Array.isArray(v) ? v.length > 0 : (v && v !== "")).length;
   const filterNote = activeFilterCount
     ? `<div class="text-[11px] text-[var(--muted)] px-1 mb-3">対象: ${records.length}件（全${baseRecords.length}件中 / ${activeFilterCount}項目で絞り込み中）</div>`
@@ -4527,8 +4557,6 @@ function renderStats() {
   const addAvgAndDist = m => ({
     ...m,
     avg: avg(records.map(r => rateToNum(r[m.group][m.key]))),
-    prevAvg: hasPrev ? avg(prevRecords.map(r => rateToNum(r[m.group][m.key]))) : null,
-    prevN: prevRecords.length,
     dist: distOf(m),
   });
   const teamAvgs = teamMetrics.map(addAvgAndDist);
@@ -4541,23 +4569,6 @@ function renderStats() {
   const helpYesCount = records.filter(r => r.workload.break_secured === "確保できなかった" && r.workload.help_requested === "あり").length;
   const helpNoCount = records.filter(r => r.workload.break_secured === "確保できなかった" && r.workload.help_requested === "なし").length;
 
-  // 前期比バッジHTMLを返す（変化量、色分け、データ不足時の表示を制御）
-  const renderTrendBadge = (curr, prev, prevN) => {
-    if (!hasPrev) return ""; // 全期間ビューでは比較しない
-    if (curr === null || prev === null || prevN === 0) {
-      return `<span class="trend-badge trend-na" title="前期データなし">— vs 前期</span>`;
-    }
-    const diff = curr - prev;
-    const absD = Math.abs(diff);
-    // ±0.05以内は横ばい、それ以外は改善/悪化
-    let cls, arrow;
-    if (absD <= 0.05) { cls = "trend-flat"; arrow = "→"; }
-    else if (diff > 0) { cls = "trend-up"; arrow = "↑"; }
-    else { cls = "trend-down"; arrow = "↓"; }
-    const sign = diff > 0 ? "+" : (diff < 0 ? "−" : "±");
-    return `<span class="trend-badge ${cls}" title="前期 ${prev.toFixed(2)} (n=${prevN}) との比較">${arrow} ${sign}${absD.toFixed(2)}</span>`;
-  };
-
   const renderBar = (m) => {
     const v = m.avg;
     const pct = v ? (v/3)*100 : 0;
@@ -4565,12 +4576,9 @@ function renderStats() {
     const total = m.dist.good + m.dist.mid + m.dist.bad;
     return `
       <div class="mb-3">
-        <div class="flex items-center justify-between mb-1 gap-2 flex-wrap">
+        <div class="flex items-center justify-between mb-1">
           <span class="text-[12px] font-semibold text-[var(--navy-800)]">${m.label}</span>
-          <div class="flex items-center gap-2">
-            ${renderTrendBadge(m.avg, m.prevAvg, m.prevN)}
-            <span class="text-[13px] font-bold num-tabular" style="color:${color}">${v !== null ? v.toFixed(2) : "—"}<span class="text-[10px] text-[var(--muted)] ml-1">(n=${total})</span></span>
-          </div>
+          <span class="text-[13px] font-bold num-tabular" style="color:${color}">${v !== null ? v.toFixed(2) : "—"}<span class="text-[10px] text-[var(--muted)] ml-1">(n=${total})</span></span>
         </div>
         <div class="score-bar">
           <div style="width:${pct}%; background:${color}"></div>
