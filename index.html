@@ -3237,11 +3237,6 @@ function setupTabs() {
       $("#tab-input").classList.toggle("hidden", target !== "input");
       $("#tab-history").classList.toggle("hidden", target !== "history");
       $("#tab-stats").classList.toggle("hidden", target !== "stats");
-      // 入力タブに戻った瞬間、保存後の保留リセットがあれば実行
-      if (target === "input" && pendingFormReset) {
-        resetForm();
-        pendingFormReset = false;
-      }
       if (target === "history") renderHistory();
       if (target === "stats") renderStats();
       window.scrollTo({ top: 0, behavior: "smooth" });
@@ -3439,10 +3434,9 @@ function setupSaveFlow() {
 
   $("#postCloseBtn").addEventListener("click", () => {
     closeModal("postSaveModal");
+    resetForm();
     refreshNotificationBadge();
-    // フォームの内容はそのまま残す（誤って閉じた場合の見返し用）
-    // ただし次に入力タブに戻ってきたタイミングでリセットする
-    pendingFormReset = true;
+    window.scrollTo({ top: 0, behavior: "smooth" });
   });
   $("#postNewBtn").addEventListener("click", () => {
     closeModal("postSaveModal");
@@ -3484,8 +3478,6 @@ let earlyPrefetchTimer = null;   // デバウンス用タイマー
 let earlyPrefetchCount = 0;       // 自動プリフェッチの発動回数（上限制御）
 const EARLY_PREFETCH_MAX = 3;     // 1回の振り返り入力で自動プリフェッチする最大回数
 const EARLY_PREFETCH_DELAY = 3000; // 入力が止まってからプリフェッチ発動までの待ち時間(ms)
-// 保存後「閉じる」を押された後、次に入力タブに戻ったときフォームをリセットするフラグ
-let pendingFormReset = false;
 
 // 個人情報を示す可能性のあるパターン
 const PII_PATTERNS = [
